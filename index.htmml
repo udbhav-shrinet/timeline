@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Timeline.</title>
+    
+    <!-- Tailwind CSS for Styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome for Icons (Replaces Lucide for pure HTML setup) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- React & ReactDOM (Standalone) -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel (Translates React JSX inside the browser) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,600;9..40,800&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+        body { 
+            font-family: 'DM Sans', sans-serif; 
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.04'/%3E%3C/svg%3E"); 
+        }
+        .font-mono { font-family: 'Space Mono', monospace; }
+        .cute-shadow { box-shadow: 4px 4px 0px 0px #111; }
+        .cute-shadow-sm { box-shadow: 2px 2px 0px 0px #111; }
+        .cute-shadow-hover:hover { box-shadow: 8px 8px 0px 0px #111; transform: translate(-2px, -2px); }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #fcfcfc; border-left: 2px solid #111; }
+        ::-webkit-scrollbar-thumb { background: #111; border-radius: 0px; border: 2px solid #fcfcfc; }
+        ::-webkit-scrollbar-thumb:hover { background: #333; }
+    </style>
+</head>
+<body class="bg-[#fcfcfc] text-[#111] selection:bg-[#FF90E8] selection:text-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- VIBRANT ACCENT COLORS ---
+        const accentColors = [
+          { bg: 'bg-[#FF90E8]', border: 'border-[#FF90E8]', text: 'text-[#FF90E8]' }, 
+          { bg: 'bg-[#00E5FF]', border: 'border-[#00E5FF]', text: 'text-[#00E5FF]' }, 
+          { bg: 'bg-[#FFC900]', border: 'border-[#FFC900]', text: 'text-[#FFC900]' }, 
+          { bg: 'bg-[#00FF66]', border: 'border-[#00FF66]', text: 'text-[#00FF66]' }, 
+          { bg: 'bg-[#FF4D4D]', border: 'border-[#FF4D4D]', text: 'text-[#FF4D4D]' }, 
+          { bg: 'bg-[#FF9800]', border: 'border-[#FF9800]', text: 'text-[#FF9800]' }, 
+          { bg: 'bg-[#B388FF]', border: 'border-[#B388FF]', text: 'text-[#B388FF]' }  
+        ];
+
+        const OR_API_KEY = "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";
+        const MODELS_TO_TRY = ["google/gemini-2.5-flash", "meta-llama/llama-3-8b-instruct:free", "mistralai/mistral-7b-instruct:free"];
+
+        // --- HELPER FUNCTIONS ---
+        const fetchWithTimeout = async (resource, options = {}) => {
+          const { timeout = 8000 } = options; 
+          const controller = new AbortController();
+          const id = setTimeout(() => controller.abort(), timeout);
+          try {
+            const response = await fetch(resource, { ...options, signal: controller.signal });
+            clearTimeout(id);
+            return response;
+          } catch (error) {
+            clearTimeout(id);
+            throw error;
+          }
+        };
+
+        const fetchGlobalNews = async (query = "") => {
+          const url = query 
+            ? `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`
+            : `https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en`;
+          try {
+            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+            const res = await fetchWithTimeout(proxyUrl, { timeout: 10000 });
+            if (!res.ok) throw new Error("Primary proxy failed");
+            const text = await res.text();
+            const parser = new DOMParser();
+            const xml = parser.parseFromString(text, "text/xml");
+            const items = Array.from(xml.querySelectorAll("item")).map(item => ({
+              title: item.querySelector("title")?.textContent || "",
+              link: item.querySelector("link")?.textContent || "",
+              pubDate: item.querySelector("pubDate")?.textContent || new Date().toISOString()
+            }));
+            if (items.length > 0) return items;
+            throw new Error("No items in XML");
+          } catch (err) {
+            const rss2jsonUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`;
+            const res = await fetchWithTimeout(rss2jsonUrl, { timeout: 8000 });
+            const data = await res.json();
+            if (data.status === 'ok' && data.items) return data.items;
+            throw new Error("Failed to fetch news feed");
+          }
+        };
+
+        const parseNewsItem = (item) => {
+          const parts = item.title.split(' - ');
+          const source = parts.length > 1 ? parts.pop() : "Global News";
+          const headline = parts.join(' - ').trim();
+          return { headline, source: source.trim(), link: item.link, date: new Date(item.pubDate) };
+        };
+
+        const generateWithAI = async (prompt, isMountedRef, maxTokens = 2000) => {
+          for (const model of MODELS_TO_TRY) {
+            if (!isMountedRef.current) return null;
+            try {
+              const res = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${OR_API_KEY}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ model: model, messages: [{ role: "user", content: prompt }], temperature: 0.1, max_tokens: maxTokens }),
+                timeout: 30000 
+              });
+              if (!res.ok) continue;
+              const json = await res.json();
+              const rawText = json.choices[0].message.content.trim();
+              const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+              if (jsonMatch) return JSON.parse(jsonMatch[0]);
+            } catch (err) { console.warn(`AI Model failed...`); }
+          }
+          throw new Error("All AI models failed");
+        };
+
+        // --- COMPONENTS ---
+        function SearchBar({ onSearch, initialValue = "" }) {
+          const [query, setQuery] = useState(initialValue);
+          useEffect(() => { setQuery(initialValue); }, [initialValue]);
+          const handleSubmit = (e) => {
+            e.preventDefault();
+            if (query.trim()) onSearch(query.trim());
+          };
+          return (
+            <form onSubmit={handleSubmit} className="relative flex items-center w-full">
+              <input type="text" placeholder="search any global or local category..." value={query} onChange={(e) => setQuery(e.target.value)} className="w-full pl-6 pr-16 py-3 text-sm md:text-base border-[3px] border-black rounded-full bg-white cute-shadow focus:outline-none focus:ring-0 font-bold lowercase placeholder:text-gray-400 transition-transform hover:-translate-y-1" />
+              <button type="submit" className="absolute right-2 top-2 bottom-2 bg-black text-white px-4 rounded-full flex items-center justify-center hover:bg-[#FFC900] hover:text-black border-[2px] border-transparent hover:border-black transition-colors">
+                <i className="fa-solid fa-search"></i>
+              </button>
+            </form>
+          );
+        }
+
+        function FeedView({ query, onSelectTopic }) {
+          const [topics, setTopics] = useState([]);
+          const [isLoading, setIsLoading] = useState(true);
+          const [error, setError] = useState(null);
+          const isMountedRef = useRef(true);
+
+          useEffect(() => {
+            isMountedRef.current = true;
+            const fetchAndClusterFeed = async () => {
+              setIsLoading(true); setError(null);
+              try {
+                const rawItems = await fetchGlobalNews(query);
+                if (!rawItems || rawItems.length === 0) throw new Error(`no news found for '${query}'.`);
+                
+                const processed = rawItems.map(item => parseNewsItem(item));
+                const headlinesOnly = processed.slice(0, 40).map(i => i.headline);
+
+                const prompt = `You are a senior news editor. Cluster these specific articles into 6 to 12 BROAD, distinct thematic topics. Raw Headlines: ${JSON.stringify(headlinesOnly)}. Return ONLY JSON: {"topics": [{"headline": "Broad Topic", "date": "Today", "source": "Aggregated"}]}`;
+
+                let clusteredTopics = [];
+                try {
+                  const aiResult = await generateWithAI(prompt, isMountedRef, 1500);
+                  if (aiResult && aiResult.topics) clusteredTopics = aiResult.topics;
+                } catch (aiErr) {}
+
+                if (clusteredTopics.length === 0) {
+                  const seenWords = new Set();
+                  for (const item of processed) {
+                    const signature = item.headline.split(' ').slice(0, 2).join(' ').toLowerCase();
+                    if (!seenWords.has(signature) && clusteredTopics.length < 12) {
+                       seenWords.add(signature);
+                       clusteredTopics.push({ headline: item.headline, date: item.date.toLocaleDateString(), source: item.source });
+                    }
+                  }
+                }
+
+                const finalTopics = clusteredTopics.map((t, idx) => ({
+                  ...t, id: Math.random().toString(36),
+                  image: `https://picsum.photos/seed/${t.headline.replace(/\s/g, '')}/600/400?grayscale`,
+                  color: accentColors[idx % accentColors.length]
+                }));
+                
+                if (isMountedRef.current) setTopics(finalTopics);
+              } catch (err) {
+                if (isMountedRef.current) setError(err.message);
+              } finally {
+                if (isMountedRef.current) setIsLoading(false);
+              }
+            };
+            fetchAndClusterFeed();
+            return () => { isMountedRef.current = false; };
+          }, [query]);
+
+          if (isLoading) return <div className="flex flex-col items-center justify-center py-32 text-center"><i className="fa-solid fa-spinner fa-spin text-4xl mb-6"></i><h2 className="text-3xl font-extrabold lowercase mb-2">clustering themes...</h2><p className="text-gray-500 font-medium lowercase">ai is grouping articles into broad topics.</p></div>;
+          if (error) return <div className="flex flex-col items-center justify-center py-32 text-center"><i className="fa-solid fa-exclamation-circle text-4xl mb-6"></i><h2 className="text-3xl font-extrabold lowercase mb-2">no news found.</h2><p className="text-gray-500 font-medium lowercase">{error}</p></div>;
+
+          return (
+            <div className="w-full pb-10">
+              <div className="mb-10 text-center md:text-left">
+                <h1 className="text-5xl md:text-7xl font-extrabold tracking-tighter mb-4 lowercase text-black">{query ? `${query}.` : 'trending globally.'}</h1>
+                <p className="text-lg md:text-xl font-medium text-gray-600 lowercase">select a card to generate its deep timeline.</p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
+                {topics.map((topic) => (
+                  <button key={topic.id} onClick={() => onSelectTopic(topic.headline)} className="group text-left flex flex-col bg-white border-[3px] border-black rounded-[2rem] overflow-hidden cute-shadow hover:shadow-[10px_10px_0px_0px_#111] hover:translate-x-[-4px] hover:translate-y-[-4px] transition-all duration-300">
+                    <div className="h-48 md:h-56 w-full border-b-[3px] border-black overflow-hidden relative bg-gray-100">
+                       <img src={topic.image} className="w-full h-full object-cover filter grayscale group-hover:grayscale-0 group-hover:scale-110 transition-all duration-700 ease-in-out" />
+                       <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors duration-500"></div>
+                       <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                          <div className={`w-16 h-16 rounded-full border-[3px] border-black flex items-center justify-center ${topic.color.bg} cute-shadow-sm rotate-12 group-hover:rotate-0 transition-transform`}><i className="fa-solid fa-bolt text-2xl text-black"></i></div>
+                       </div>
+                       <div className="absolute top-4 left-4 bg-white border-[2px] border-black rounded-full px-3 py-1 font-mono text-xs font-bold uppercase text-black cute-shadow-sm flex items-center gap-1 max-w-[80%] truncate">
+                         <i className="fa-solid fa-globe shrink-0"></i> <span className="truncate">{topic.source}</span>
+                       </div>
+                    </div>
+                    <div className="p-6 flex flex-col flex-1 bg-white">
+                      <h2 className="text-xl md:text-2xl font-extrabold tracking-tight lowercase leading-[1.2] group-hover:underline decoration-4 underline-offset-4 mb-4 line-clamp-3">{topic.headline}</h2>
+                      <div className="mt-auto flex items-center justify-between">
+                        <span className="font-mono font-bold text-xs uppercase text-gray-500">{topic.date}</span>
+                        <span className={`font-mono font-bold text-xs uppercase transition-colors ${topic.color.text}`}>view timeline <i className="fa-solid fa-chevron-right text-[10px]"></i></span>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        }
+
+        function BubbleGraph({ events }) {
+          const containerRef = useRef(null);
+          const [renderedNodes, setRenderedNodes] = useState([]);
+          const [edges, setEdges] = useState([]);
+          const [selectedEvent, setSelectedEvent] = useState(null);
+          const nodesRef = useRef([]);
+          const dragNodeRef = useRef(null);
+
+          const getKeywords = (text) => text.toLowerCase().replace(/[^a-z\s]/g, '').split(' ').filter(w => w.length > 5);
+
+          useEffect(() => {
+            const initialNodes = events.map((ev, i) => ({
+              ...ev, id: i, x: Math.random() * 300 + 100, y: Math.random() * 300 + 100, vx: 0, vy: 0,
+              radius: 50 + (events.length - i) * 1.5, color: accentColors[i % accentColors.length],
+              keywords: getKeywords(ev.headline + ' ' + ev.details)
+            }));
+
+            const newEdges = [];
+            for(let i = 0; i < initialNodes.length; i++) {
+              if (i < initialNodes.length - 1) newEdges.push({ source: i, target: i+1, type: 'time' }); 
+              for(let j = i + 2; j < initialNodes.length; j++) {
+                if (initialNodes[i].keywords.some(k => initialNodes[j].keywords.includes(k))) {
+                  newEdges.push({ source: i, target: j, type: 'data' });
+                }
+              }
+            }
+            nodesRef.current = initialNodes; setEdges(newEdges);
+
+            let animationFrame;
+            const applyForces = (width, height) => {
+              const nodes = nodesRef.current;
+              for(let i=0; i<nodes.length; i++) {
+                for(let j=i+1; j<nodes.length; j++) {
+                  const dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
+                  let dist = Math.sqrt(dx*dx + dy*dy) || 1;
+                  if (dist < 300) {
+                    const force = 4000 / (dist * dist);
+                    nodes[i].vx += (dx/dist)*force; nodes[i].vy += (dy/dist)*force;
+                    nodes[j].vx -= (dx/dist)*force; nodes[j].vy -= (dy/dist)*force;
+                  }
+                }
+              }
+              newEdges.forEach(edge => {
+                const source = nodes[edge.source], target = nodes[edge.target];
+                if(!source || !target) return;
+                const dx = target.x - source.x, dy = target.y - source.y, dist = Math.sqrt(dx*dx + dy*dy) || 1;
+                const force = (dist - (edge.type === 'time' ? 140 : 250)) * 0.02;
+                source.vx += (dx/dist)*force; source.vy += (dy/dist)*force;
+                target.vx -= (dx/dist)*force; target.vy -= (dy/dist)*force;
+              });
+              nodes.forEach(node => {
+                node.vx += ((width / 2) - node.x) * 0.005; node.vy += ((height / 2) - node.y) * 0.005;
+                if(!node.isDragging) { node.x += node.vx; node.y += node.vy; }
+                node.vx *= 0.85; node.vy *= 0.85;
+                node.x = Math.max(node.radius, Math.min(width - node.radius, node.x));
+                node.y = Math.max(node.radius, Math.min(height - node.radius, node.y));
+              });
+            };
+
+            const tick = () => {
+              if (containerRef.current) {
+                applyForces(containerRef.current.clientWidth, containerRef.current.clientHeight);
+                setRenderedNodes([...nodesRef.current]);
+              }
+              animationFrame = requestAnimationFrame(tick);
+            };
+            tick();
+            return () => cancelAnimationFrame(animationFrame);
+          }, [events]);
+
+          useEffect(() => {
+            const handleMove = (e) => {
+              if (dragNodeRef.current && containerRef.current) {
+                const rect = containerRef.current.getBoundingClientRect();
+                dragNodeRef.current.x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+                dragNodeRef.current.y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+              }
+            };
+            const handleUp = () => { if (dragNodeRef.current) dragNodeRef.current.isDragging = false; dragNodeRef.current = null; };
+            window.addEventListener('mousemove', handleMove); window.addEventListener('mouseup', handleUp);
+            window.addEventListener('touchmove', handleMove, { passive: false }); window.addEventListener('touchend', handleUp);
+            return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); window.removeEventListener('touchmove', handleMove); window.removeEventListener('touchend', handleUp); }
+          }, []);
+
+          return (
+            <div className="relative w-full h-[75vh] min-h-[600px] border-[4px] border-black rounded-[2rem] bg-gray-50 cute-shadow overflow-hidden" ref={containerRef}>
+               <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(#000 2px, transparent 2px)', backgroundSize: '30px 30px' }}></div>
+               <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
+                  {edges.map((edge, i) => {
+                    const source = renderedNodes[edge.source], target = renderedNodes[edge.target];
+                    if(!source || !target) return null;
+                    return <line key={i} x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="black" strokeWidth={edge.type === 'time' ? 4 : 2} strokeDasharray={edge.type === 'data' ? "6 6" : "none"} opacity={edge.type === 'time' ? 1 : 0.3} />
+                  })}
+               </svg>
+               {renderedNodes.map(node => (
+                 <div key={node.id} onPointerDown={(e) => { e.stopPropagation(); node.isDragging = true; dragNodeRef.current = node; setSelectedEvent(node); }} className={`absolute flex items-center justify-center p-3 rounded-full border-[4px] border-black cursor-grab active:cursor-grabbing shadow-[6px_6px_0px_0px_#111] hover:scale-105 transition-transform select-none z-10 ${node.color.bg}`} style={{ width: node.radius * 2, height: node.radius * 2, left: node.x - node.radius, top: node.y - node.radius, touchAction: 'none' }}>
+                   <div className="text-center w-full h-full flex items-center justify-center pointer-events-none"><span className="text-xs md:text-sm font-bold leading-tight line-clamp-4 text-black px-1">{node.headline}</span></div>
+                 </div>
+               ))}
+               {selectedEvent && (
+                 <div className="absolute bottom-6 right-6 left-6 md:left-auto md:w-96 bg-white border-[4px] border-black p-6 rounded-[2rem] cute-shadow-sm z-50">
+                    <button onClick={() => setSelectedEvent(null)} className="absolute top-4 right-4 bg-gray-100 hover:bg-gray-200 rounded-full w-8 h-8 flex items-center justify-center border-2 border-black"><i className="fa-solid fa-times"></i></button>
+                    <div className={`inline-block border-[2px] border-black rounded-full px-3 py-1 font-mono text-xs font-bold uppercase tracking-widest mb-4 ${selectedEvent.color.bg} text-black`}>{selectedEvent.date}</div>
+                    <h3 className="text-xl font-extrabold tracking-tighter leading-[1.1] lowercase text-black mb-4">{selectedEvent.headline}</h3>
+                    <p className="text-sm font-medium text-gray-800 leading-relaxed lowercase mb-4">{selectedEvent.details}</p>
+                    <a href={selectedEvent.link || `https://news.google.com/search?q=${encodeURIComponent(selectedEvent.headline)}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center gap-2 font-mono font-bold text-xs uppercase px-4 py-2 border-[2px] border-black rounded-full hover:translate-y-[-2px] hover:shadow-[4px_4px_0px_0px_#111] transition-all bg-black text-white w-full">read source article <i className="fa-solid fa-external-link-alt"></i></a>
+                 </div>
+               )}
+            </div>
+          );
+        }
+
+        function TimelineView({ topic, onBack }) {
+          const [events, setEvents] = useState([]);
+          const [isLoading, setIsLoading] = useState(true);
+          const [error, setError] = useState(null);
+          const [expandedIndices, setExpandedIndices] = useState(new Set([0])); 
+          const [timelineMode, setTimelineMode] = useState('list'); 
+          const isMountedRef = useRef(true);
+
+          const toggleExpand = (index) => {
+            const newSet = new Set(expandedIndices);
+            if (newSet.has(index)) newSet.delete(index); else newSet.add(index);
+            setExpandedIndices(newSet);
+          };
+
+          useEffect(() => {
+            isMountedRef.current = true;
+            const buildDeepTimeline = async () => {
+              setIsLoading(true); setError(null); setExpandedIndices(new Set([0])); 
+              try {
+                const rawNews = await fetchGlobalNews(topic);
+                const groundData = rawNews.map(item => parseNewsItem(item)).slice(0, 15); 
+
+                const prompt = `You are a historian. Topic: "${topic}". Ground data: ${JSON.stringify(groundData)}. RULES: Merge duplicates into today. Add 5 to 30 past historical milestones. Sort NEWEST to OLDEST. Return JSON: {"events": [{"date": "String", "headline": "string", "details": "String", "source": "String", "link": "String"}]}`;
+
+                let timelineEvents = [];
+                try {
+                  const aiResult = await generateWithAI(prompt, isMountedRef, 4000);
+                  if (aiResult && aiResult.events) timelineEvents = aiResult.events;
+                } catch (aiErr) {}
+
+                if (timelineEvents.length === 0) {
+                  timelineEvents = groundData.map(item => ({ date: item.date.toLocaleDateString(), timestamp: item.date.getTime(), headline: item.headline, details: `Latest direct match reported by ${item.source}. AI historical context generation timed out.`, source: item.source, link: item.link }));
+                  timelineEvents.sort((a, b) => b.timestamp - a.timestamp); 
+                }
+                if (isMountedRef.current) setEvents(timelineEvents);
+              } catch (err) {
+                if (isMountedRef.current) setError(err.message);
+              } finally {
+                if (isMountedRef.current) setIsLoading(false);
+              }
+            };
+            buildDeepTimeline();
+            return () => { isMountedRef.current = false; };
+          }, [topic]);
+
+          if (isLoading) return <div className="flex flex-col items-center justify-center py-32 text-center"><i className="fa-solid fa-spinner fa-spin text-4xl mb-6"></i><h2 className="text-3xl font-extrabold lowercase mb-2">curating historical timeline...</h2><p className="text-gray-500 font-medium lowercase">ai is analyzing decades of history for '{topic}'.</p></div>;
+          if (error) return <div className="flex flex-col items-center justify-center py-32 text-center"><i className="fa-solid fa-exclamation-circle text-4xl mb-6"></i><h2 className="text-3xl font-extrabold lowercase mb-2">network error.</h2><p className="text-gray-500 font-medium lowercase mb-8">{error}</p><button onClick={onBack} className="px-6 py-3 bg-white border-[3px] border-black rounded-full font-bold lowercase cute-shadow-sm">go back</button></div>;
+
+          return (
+            <div className="w-full max-w-4xl mx-auto">
+               <button onClick={onBack} className="mb-8 inline-flex items-center gap-2 font-bold px-5 py-2.5 bg-white border-[3px] border-black rounded-full cute-shadow-sm hover:translate-y-[-2px] hover:shadow-[4px_4px_0px_0px_#111] transition-all"><i className="fa-solid fa-arrow-left"></i> back to feed</button>
+
+               <div className="flex flex-col md:flex-row md:items-end justify-between mb-10 pb-4 border-b-[3px] border-black/10 gap-6">
+                  <div>
+                    <h2 className="text-3xl md:text-5xl font-extrabold tracking-tighter lowercase mb-4">timeline logic.</h2>
+                    <p className="text-lg font-medium text-gray-600 lowercase border-l-[4px] border-[#FF90E8] pl-4">ai-curated deep history of: <strong className="text-black">{topic}</strong></p>
+                  </div>
+                  <div className="flex items-center bg-white border-[3px] border-black rounded-full overflow-hidden cute-shadow-sm shrink-0">
+                     <button onClick={() => setTimelineMode('list')} className={`px-5 py-2.5 font-bold flex items-center gap-2 transition-colors ${timelineMode === 'list' ? 'bg-[#FFC900] text-black' : 'hover:bg-gray-100 text-gray-600'}`}><i className="fa-solid fa-list"></i> list</button>
+                     <div className="w-[3px] bg-black self-stretch"></div>
+                     <button onClick={() => setTimelineMode('bubbles')} className={`px-5 py-2.5 font-bold flex items-center gap-2 transition-colors ${timelineMode === 'bubbles' ? 'bg-[#FFC900] text-black' : 'hover:bg-gray-100 text-gray-600'}`}><i className="fa-solid fa-project-diagram"></i> bubbles</button>
+                  </div>
+               </div>
+
+               {timelineMode === 'bubbles' ? (
+                 <BubbleGraph events={events} />
+               ) : (
+                 <div className="flex flex-col border-[3px] border-black rounded-[2rem] bg-white overflow-hidden cute-shadow">
+                   {events.map((event, index) => {
+                     const isExpanded = expandedIndices.has(index);
+                     const color = accentColors[index % accentColors.length]; 
+                     return (
+                       <div key={index} className={`group border-b-[3px] border-black last:border-b-0 transition-colors duration-300 ${isExpanded ? 'bg-gray-50' : 'hover:bg-gray-50'}`}>
+                         <button onClick={() => toggleExpand(index)} className="w-full flex items-start md:items-center justify-between p-4 md:p-6 text-left cursor-pointer gap-4">
+                           <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-6 flex-1">
+                             <div className="font-mono text-xs md:text-sm font-bold uppercase tracking-widest text-gray-500 shrink-0 md:w-32 flex items-center gap-2"><span className={`w-2 h-2 rounded-full border-[2px] border-black ${color.bg}`}></span>{event.date}</div>
+                             <h3 className="text-xl md:text-2xl font-extrabold tracking-tighter leading-[1.1] lowercase text-black group-hover:underline decoration-2 underline-offset-4 line-clamp-2">{event.headline}</h3>
+                           </div>
+                           <div className={`w-8 h-8 rounded-full border-[2px] border-black flex items-center justify-center shrink-0 transition-transform duration-300 ${isExpanded ? `rotate-90 ${color.bg}` : 'bg-white'}`}><i className="fa-solid fa-chevron-right"></i></div>
+                         </button>
+                         <div className={`grid transition-all duration-300 overflow-hidden ${isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+                           <div className="min-h-0">
+                             <div className={`mx-4 md:mx-6 mb-6 p-5 md:p-6 border-[3px] border-black rounded-2xl bg-white cute-shadow-sm border-l-8 ${color.border}`}>
+                               <div className="flex items-center gap-2 mb-4 font-mono font-bold text-xs uppercase bg-black text-white w-max px-3 py-1 rounded-full"><i className="fa-solid fa-globe"></i> source: {event.source}</div>
+                               <p className="text-base md:text-lg font-medium text-gray-800 leading-relaxed lowercase mb-6 whitespace-pre-line">{event.details}</p>
+                               <a href={event.link || `https://news.google.com/search?q=${encodeURIComponent(event.headline)}`} target="_blank" rel="noopener noreferrer" className={`inline-flex items-center gap-2 font-mono font-bold text-xs md:text-sm uppercase px-5 py-2.5 border-[2px] border-black rounded-full hover:translate-y-[-2px] transition-transform w-max ${color.bg} text-black`}>{event.link ? 'read full source article' : 'search related articles'} <i className="fa-solid fa-external-link-alt"></i></a>
+                             </div>
+                           </div>
+                         </div>
+                       </div>
+                     );
+                   })}
+                 </div>
+               )}
+            </div>
+          );
+        }
+
+        // --- MAIN APP COMPONENT EXPORT FIX ---
+        function App() {
+          const [viewMode, setViewMode] = useState('feed'); 
+          const [feedQuery, setFeedQuery] = useState("");
+          const [activeTimelineTopic, setActiveTimelineTopic] = useState(null); 
+
+          const handleSearch = (query) => {
+            setFeedQuery(query);
+            setViewMode('feed');
+          };
+
+          const handleSelectTopic = (topic) => {
+            setActiveTimelineTopic(topic);
+            setViewMode('timeline');
+          };
+
+          return (
+            <div className="min-h-screen bg-[#fcfcfc] text-[#111] font-sans selection:bg-[#FF90E8] selection:text-black relative pb-10">
+              <header className="sticky top-0 z-40 bg-[#fcfcfc]/90 backdrop-blur-md border-b-[3px] border-black py-4 px-6 md:px-10 flex flex-col md:flex-row items-center justify-between gap-4">
+                <button 
+                  onClick={() => { setFeedQuery(""); setViewMode('feed'); }}
+                  className="text-2xl md:text-3xl font-extrabold tracking-tighter lowercase text-black hover:text-[#00E5FF] transition-colors flex items-center gap-2"
+                >
+                  <i className="fa-solid fa-globe"></i> the timeline.
+                </button>
+                
+                <div className="w-full md:w-auto flex-1 max-w-xl">
+                  <SearchBar onSearch={handleSearch} initialValue={feedQuery} />
+                </div>
+              </header>
+
+              <main className="max-w-6xl mx-auto px-4 md:px-6 py-10">
+                {viewMode === 'timeline' && activeTimelineTopic ? (
+                   <TimelineView topic={activeTimelineTopic} onBack={() => setViewMode('feed')} />
+                ) : (
+                   <FeedView query={feedQuery} onSelectTopic={handleSelectTopic} />
+                )}
+              </main>
+            </div>
+          );
+        }
+
+        // Render the App
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
